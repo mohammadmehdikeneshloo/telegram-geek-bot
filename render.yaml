@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: telegram-event-bot
+    env: python
+    buildCommand: ""
+    startCommand: "python server.py"
+    plan: free
