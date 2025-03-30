@@ -5,9 +5,10 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 import pytz
+import jdatetime
 
 # === تنظیمات اصلی ===
-TOKEN = '7844573664:AAHKNHPDVCbc7JkMyKlsGzEYQ_V3eZ3s0lc'
+TOKEN = '7844573664:AAHKNHPDVCbc7JkMyGzEYQ_V3eZ3s0lc'
 CHANNEL_CHAT_ID = -1002641319532
 ADMIN_USER_ID = 7140532760
 TIMEZONE = 'Asia/Tehran'
@@ -23,6 +24,17 @@ capacities = {}     # ظرفیت ایونت‌ها
 minimums = {}       # حداقل رزرو مورد نیاز برای هر ایونت
 message_ids = {}    # شناسه پیام ارسال شده به کانال برای هر ایونت
 event_info = {}     # اطلاعات ایونت شامل زمان، محل، تاریخ، عنوان و کد ایونت
+
+# دیکشنری تبدیل روزهای انگلیسی به فارسی
+day_mapping = {
+    'Monday': 'دوشنبه',
+    'Tuesday': 'سه‌شنبه',
+    'Wednesday': 'چهارشنبه',
+    'Thursday': 'پنج‌شنبه',
+    'Friday': 'جمعه',
+    'Saturday': 'شنبه',
+    'Sunday': 'یکشنبه'
+}
 
 def get_event_markup(event_id, remaining):
     """بر اساس ظرفیت باقی‌مانده، دکمه مناسب را تولید می‌کند."""
@@ -64,7 +76,7 @@ def send_event():
     data = sheet.get_all_records()
     now = datetime.now(pytz.timezone(TIMEZONE)).date()
     for row in data:
-        # ستون‌های شیت: "کد ایونت"، "تاریخ"، "عنوان"، "ساعت"، "مکان"، "ظرفیت"، "حداقل" و "برنده"
+        # ستون‌های شیت: "کد ایونت"، "تاریخ"، "عنوان"، "ساعت"، "مکان"، "ظرفیت"، "حداقل" و ...
         event_date = datetime.strptime(row['تاریخ'], '%Y-%m-%d').date()
         if (event_date - now).days == 1:
             post_event_to_channel(row)
@@ -76,6 +88,13 @@ def post_event_to_channel(row):
     time_format = "%H:%M"
     event_time = datetime.strptime(row['ساعت'], time_format)
     reminder_time = (event_time - timedelta(minutes=15)).strftime(time_format)
+    
+    # تبدیل تاریخ میلادی به شمسی
+    event_date_obj = datetime.strptime(row['تاریخ'], '%Y-%m-%d').date()
+    jalali_date = jdatetime.date.fromgregorian(date=event_date_obj)
+    jalali_date_str = jalali_date.strftime("%Y/%m/%d")
+    english_day = event_date_obj.strftime('%A')
+    persian_day = day_mapping.get(english_day, english_day)
     
     if event_id in event_info:
         # ایونت قبلاً ارسال شده؛ اطلاعات به‌روز می‌شود
@@ -95,8 +114,9 @@ def post_event_to_channel(row):
             names_text = "\n✉ رزروها:\n" + "\n".join([f"{i}. {u['name']}" for i, u in enumerate(current_reservations, start=1)])
         new_text = f"""🎲 <b>{row['عنوان']}</b>
 کد ایونت: {event_code}
-🕒 {row['تاریخ']} - ساعت {row['ساعت']}
-📍 {row['مکان']}
+🕒 {persian_day} - ساعت {row['ساعت']}
+📅 تاریخ: {jalali_date_str}
+📍 محل: {row['مکان']}
 👥 ظرفیت: {row['ظرفیت']} نفر
 📉 ظرفیت باقی‌مانده: {remaining} نفر
 {names_text}
@@ -127,8 +147,9 @@ def post_event_to_channel(row):
         remaining = capacities[event_id]
         new_text = f"""🎲 <b>{row['عنوان']}</b>
 کد ایونت: {event_code}
-🕒 {row['تاریخ']} - ساعت {row['ساعت']}
-📍 {row['مکان']}
+🕒 {persian_day} - ساعت {row['ساعت']}
+📅 تاریخ: {jalali_date_str}
+📍 محل: {row['مکان']}
 👥 ظرفیت: {row['ظرفیت']} نفر
 📉 ظرفیت باقی‌مانده: {remaining} نفر
 
@@ -147,6 +168,18 @@ def handle_reservation(call):
     user = call.from_user
     entry = f"{user.first_name} (@{user.username or 'بدون_یوزرنیم'})"
     event_title = event_info.get(event_id, {}).get("title", "")
+    
+    # محاسبه روز هفته و تاریخ شمسی از اطلاعات ایونت
+    event_date_str = event_info.get(event_id, {}).get("date", "")
+    if event_date_str:
+        event_date_obj = datetime.strptime(event_date_str, '%Y-%m-%d').date()
+        jalali_date = jdatetime.date.fromgregorian(date=event_date_obj)
+        jalali_date_str = jalali_date.strftime("%Y/%m/%d")
+        english_day = event_date_obj.strftime('%A')
+        persian_day = day_mapping.get(english_day, english_day)
+    else:
+        jalali_date_str = ""
+        persian_day = ""
     
     if action == 'reserve':
         if user.id in [u['id'] for u in reservations.get(event_id, [])]:
@@ -176,6 +209,9 @@ def handle_reservation(call):
         names_text = "\n✉ رزروها:\n" + "\n".join([f"{i}. {u['name']}" for i, u in enumerate(current_reservations, start=1)])
     remaining = capacities.get(event_id, 0) - len(current_reservations)
     new_text = f"""🎲 <b>{event_title}</b>
+🕒 {persian_day} - ساعت {event_info.get(event_id, {}).get("time", "")}
+📅 تاریخ: {jalali_date_str}
+📍 محل: {event_info.get(event_id, {}).get("location", "")}
 📉 ظرفیت باقی‌مانده: {remaining} نفر
 {names_text}
 
@@ -258,8 +294,3 @@ def show_help(message):
 
 scheduler.start()
 bot.polling(none_stop=True)
-
-
-def run_bot():
-    scheduler.start()
-    bot.polling(none_stop=True)
